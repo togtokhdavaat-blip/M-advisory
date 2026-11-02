@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Alert, Badge, Button, ButtonLink, Card, PageHeader, cx } from "@/components/ui";
+import { DocumentsPanel, type DocRow } from "@/components/documents-panel";
+import { Alert, Badge, Button, Card, Field, PageHeader, Textarea, cx } from "@/components/ui";
 import { requireUser } from "@/lib/authz";
 import { env } from "@/lib/env";
 import { formatDate, formatMnt } from "@/lib/format";
@@ -10,6 +11,8 @@ import { CLIENT_STEPS, type OrderStatus } from "@/lib/orders/state-machine";
 import {
   cancelOrderAction, checkPaymentAction, mockPayAction, reopenDraftAction, startPaymentAction, submitOrderAction,
 } from "../actions";
+import { feedbackAction, infoProvidedAction } from "../doc-actions";
+import { RISK_LABEL, type RiskLevel } from "@/lib/reports/schema";
 
 export const metadata = { title: "Захиалга" };
 
@@ -22,7 +25,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const d = await getOrderDetail(access.user, id);
   if (!d || d.order.client_id !== access.user.id) notFound();
 
-  const { order, property, parties, history, payments, quote } = d;
+  const { order, property, parties, history, payments, quote, documents, reports, feedback, requirements } = d;
+  const infoRequest = [...history].reverse().find((h) => h.to_status === "needs_information");
   const status = order.status as OrderStatus;
   const pending = payments.find((p) => p.status === "pending");
   const paid = payments.find((p) => p.status === "paid");
@@ -44,7 +48,19 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         {sp.paid && <Alert tone="good" title="Төлбөр баталгаажлаа">Таны захиалгад мэргэжилтэн удахгүй хуваарилагдана.</Alert>}
         {sp.pending && <Alert tone="warn">Төлбөр хараахан орж ирээгүй байна. Төлсний дараа дахин шалгана уу.</Alert>}
         {sp.cancelled && <Alert tone="neutral">Захиалга цуцлагдлаа.</Alert>}
+        {sp.uploaded && <Alert tone="good">Файл байршлаа.</Alert>}
+        {sp.info && <Alert tone="good">Мэдээлэл илгээгдлээ. Зөвлөх ажлаа үргэлжлүүлнэ.</Alert>}
+        {sp.thanks && <Alert tone="good">Үнэлгээ өгсөнд баярлалаа.</Alert>}
         {sp.error && <Alert tone="bad">{sp.error}</Alert>}
+        {status === "needs_information" && (
+          <Alert tone="warn" title="Зөвлөхөөс нэмэлт мэдээлэл хүсэж байна">
+            <p className="whitespace-pre-line">{(infoRequest?.reason as string) ?? ""}</p>
+            <form action={infoProvidedAction.bind(null, id)} className="mt-3 space-y-2">
+              <Textarea name="note" rows={2} aria-label="Хариу" placeholder="Хариу эсвэл тайлбар (файлаа доорх хэсгээс байршуулна)" />
+              <Button>Мэдээлэл илгээсэн</Button>
+            </form>
+          </Alert>
+        )}
       </div>
 
       {status !== "cancelled" && (
@@ -91,6 +107,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               </ul>
             </Card>
           )}
+
+          <DocumentsPanel orderId={id} back={`/dashboard/orders/${id}`} docs={documents as unknown as DocRow[]} requirements={requirements}
+            canUpload={!["completed", "cancelled"].includes(status)} />
 
           <Card>
             <h2 className="font-semibold">Түүх</h2>
@@ -190,7 +209,40 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <p className="text-sm text-muted">
                 {status === "completed" ? "Тайлан бэлэн боллоо." : "Таны захиалга дээр мэргэжилтэн ажиллаж байна. Төлөв өөрчлөгдөх бүрт энд мэдэгдэнэ."}
               </p>
-              {status === "completed" && <ButtonLink href="/dashboard/reports" className="w-full">Тайлан үзэх</ButtonLink>}
+            </Card>
+          )}
+
+          {reports.length > 0 && (
+            <Card className="space-y-3">
+              <h2 className="font-semibold">Тайлан</h2>
+              {reports.map((r) => (
+                <div key={r.id as string} className="space-y-1">
+                  <p className="text-sm">{r.report_number as string} · v{r.version as number} · {formatDate(r.published_at as string)}</p>
+                  <p className="text-sm">Нийт эрсдэл: <b>{RISK_LABEL[r.overall_risk as RiskLevel]}</b></p>
+                  <a href={`/api/reports/${r.id}`} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-accent px-5 text-sm font-semibold text-accent-ink">PDF татах</a>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {status === "completed" && (
+            <Card className="space-y-3">
+              <h2 className="font-semibold">Үйлчилгээг үнэлэх</h2>
+              {feedback ? (
+                <p className="text-sm">Таны үнэлгээ: {"★".repeat(feedback.rating as number)}{"☆".repeat(5 - (feedback.rating as number))}</p>
+              ) : (
+                <form action={feedbackAction.bind(null, id)} className="space-y-3">
+                  <fieldset className="flex gap-2" aria-label="Үнэлгээ">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <label key={n} className="flex flex-col items-center text-xs">
+                        <input type="radio" name="rating" value={n} required className="size-4" />{n}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <Field label="Сэтгэгдэл" name="comment"><Textarea id="comment" name="comment" rows={3} /></Field>
+                  <Button className="w-full">Илгээх</Button>
+                </form>
+              )}
             </Card>
           )}
         </div>

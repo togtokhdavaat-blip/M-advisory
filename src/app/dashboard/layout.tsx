@@ -17,6 +17,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           { href: "/dashboard/orders", label: "Захиалгууд" },
           { href: "/dashboard/documents", label: "Баримт бичиг" },
           { href: "/dashboard/reports", label: "Тайлан" },
+          { href: "/dashboard/notifications", label: "Мэдэгдэл" },
           { href: "/account", label: "Бүртгэл" },
         ]} />
         <form action={logoutAction} className="hidden lg:block">

@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
-import { Alert, Badge, Button, Card, Field, PageHeader, Select, Textarea } from "@/components/ui";
+import Link from "next/link";
+import { DocumentsPanel, type DocRow } from "@/components/documents-panel";
+import { Alert, Badge, Button, Card, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
 import { requireStaff } from "@/lib/authz";
 import { asUser } from "@/lib/db";
 import { formatDate, formatMnt } from "@/lib/format";
 import { ORDER_STATUS_LABEL, ORDER_STATUS_TONE, PARTY_ROLE_LABEL, PAYMENT_STATUS_LABEL, PROPERTY_TYPE_LABEL, type PropertyType } from "@/lib/labels";
 import { nextStatuses, type Actor, type OrderStatus } from "@/lib/orders/state-machine";
-import { assignAction, transitionAction } from "../../actions";
+import { assignAction, refundAction, requestInfoAction, transitionAction } from "../../actions";
 
 export const metadata = { title: "Захиалга" };
 
@@ -20,7 +22,7 @@ export default async function AdminOrderDetail({ params, searchParams }: { param
       from orders o join services s on s.id = o.service_id join branches b on b.id = o.branch_id
       left join profiles c on c.id = o.client_id where o.id = ${id}`)[0];
     if (!o) return null;
-    const [property, parties, assignments, history, payments, caps, staff] = await Promise.all([
+    const [property, parties, assignments, history, payments, caps, staff, documents, reports] = await Promise.all([
       tx`select * from properties where id = ${o.property_id}`,
       tx`select * from order_parties where order_id = ${id}`,
       tx`select a.role, a.assigned_at, p.full_name from order_assignments a join profiles p on p.id = a.user_id where a.order_id = ${id} and a.is_active`,
@@ -29,14 +31,20 @@ export default async function AdminOrderDetail({ params, searchParams }: { param
       tx`select app.order_actor_capacities(${id}::uuid) as caps`,
       tx`select m.user_id, m.role, p.full_name from memberships m join profiles p on p.id = m.user_id
          where m.branch_id = ${o.branch_id} and m.is_active and m.role in ('ADVISOR', 'REVIEWER') order by p.full_name`,
+      tx`select d.id, d.original_name, d.size_bytes, d.created_at, d.scan_status, d.is_internal, p.full_name as uploader
+         from documents d left join profiles p on p.id = d.uploaded_by where d.order_id = ${id} and d.deleted_at is null order by d.created_at desc`,
+      tx`select id, version, status from reports where order_id = ${id} order by version desc limit 1`,
     ]);
-    return { o, property: property[0], parties, assignments, history, payments, caps: (caps[0].caps as Actor[]) ?? [], staff };
+    return { o, property: property[0], parties, assignments, history, payments, caps: (caps[0].caps as Actor[]) ?? [], staff, documents, latestReport: reports[0] ?? null };
   });
   if (!data) notFound();
-  const { o, property, parties, assignments, history, payments, caps, staff } = data;
+  const { o, property, parties, assignments, history, payments, caps, staff, documents, latestReport } = data;
   const status = o.status as OrderStatus;
   const isAdmin = caps.includes("admin");
-  const moves = nextStatuses(status, caps);
+  // needs_information goes through the request form; under_review/completed through the report workflow.
+  const moves = nextStatuses(status, caps).filter((m) => !["needs_information", "under_review"].includes(m));
+  const isAdvisor = caps.includes("advisor");
+  const refundable = status === "cancelled" ? payments.filter((p) => ["paid", "refund_pending"].includes(p.status as string)) : [];
   const advisors = staff.filter((s) => s.role === "ADVISOR");
   const reviewers = staff.filter((s) => s.role === "REVIEWER");
 
@@ -81,6 +89,8 @@ export default async function AdminOrderDetail({ params, searchParams }: { param
               {payments.length === 0 && <li className="py-2 text-muted">Нэхэмжлэл үүсээгүй.</li>}
             </ul>
           </Card>
+          <DocumentsPanel orderId={id} back={`/admin/orders/${id}`} docs={documents as unknown as DocRow[]} staff
+            canUpload={!["draft", "cancelled"].includes(status)} />
           <Card>
             <h2 className="font-semibold">Төлөвийн түүх</h2>
             <ul className="mt-3 divide-y divide-line text-sm">
@@ -119,6 +129,38 @@ export default async function AdminOrderDetail({ params, searchParams }: { param
               </>
             )}
           </Card>
+          {!["draft", "awaiting_payment", "paid", "cancelled"].includes(status) && (
+            <Card className="space-y-2">
+              <h2 className="font-semibold">Тайлан</h2>
+              <p className="text-sm text-muted">{latestReport ? `v${latestReport.version} · ${latestReport.status}` : "Эхлээгүй"}</p>
+              <Link href={`/admin/orders/${id}/report`} className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-accent px-5 text-sm font-semibold text-accent-ink">
+                {isAdvisor && (!latestReport || ["draft", "revision_requested"].includes(latestReport.status as string)) ? "Тайлан бичих" : "Тайлан үзэх"}
+              </Link>
+            </Card>
+          )}
+          {isAdvisor && status === "in_progress" && (
+            <Card>
+              <h2 className="font-semibold">Харилцагчаас мэдээлэл хүсэх</h2>
+              <form action={requestInfoAction.bind(null, id)} className="mt-3 space-y-3">
+                <Textarea name="message" rows={3} required aria-label="Хүсэлт" placeholder="Жишээ: Өмчлөлийн гэрчилгээний 2 талын зургийг байршуулна уу." />
+                <Button variant="secondary" className="w-full">Хүсэлт илгээх</Button>
+              </form>
+            </Card>
+          )}
+          {refundable.map((p) => (
+            <Card key={p.id as string} className="space-y-3">
+              <h2 className="font-semibold">Буцаалт · {formatMnt(p.amount_mnt as number)}</h2>
+              <p className="text-xs text-muted">Банк/QPay-ээр буцаасны дараа энд бүртгэнэ. Төлөв: {PAYMENT_STATUS_LABEL[p.status as string]}</p>
+              <form action={refundAction.bind(null, id, p.id as string)} className="space-y-2">
+                <Input name="amount" inputMode="numeric" defaultValue={String(p.amount_mnt)} aria-label="Буцаах дүн" />
+                <Textarea name="note" rows={2} required aria-label="Тайлбар" placeholder="Шалтгаан, гүйлгээний дугаар" />
+                <div className="flex gap-2">
+                  {p.status === "paid" && <Button name="status" value="refund_pending" variant="secondary" className="flex-1">Хүлээгдэж буй</Button>}
+                  <Button name="status" value="refunded" className="flex-1">Буцаагдсан</Button>
+                </div>
+              </form>
+            </Card>
+          ))}
           {moves.length > 0 && (
             <Card>
               <h2 className="font-semibold">Төлөв өөрчлөх</h2>

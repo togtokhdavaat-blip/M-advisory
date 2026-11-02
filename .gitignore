@@ -1,9 +1,9 @@
-node_modules
-.next
+*.tsbuildinfo
 .data
 .env
 .env.local
-*.tsbuildinfo
-next-env.d.ts
+.next
 coverage
+next-env.d.ts
+node_modules
 test-results

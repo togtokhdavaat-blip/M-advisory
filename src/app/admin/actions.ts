@@ -174,3 +174,138 @@ export async function revokeRoleAction(membershipId: string) {
   revalidatePath("/admin/advisors");
   backTo("/admin/advisors", { ok: "1" });
 }
+
+// ---- Reports ----
+const REPORT_MESSAGES: Record<string, string> = {
+  report_incomplete: "Гол дүгнэлт, дор хаяж нэг эрсдэл, зөвлөмж, хязгаарлалтыг бөглөнө үү.",
+  reviewer_not_assigned: "Хянагч томилогдоогүй байна. Админд хандана уу.",
+  report_locked: "Энэ хувилбар хяналтад байгаа тул засах боломжгүй.",
+  report_not_editable_in_status: "Захиалгын энэ төлөвт тайлан засах боломжгүй.",
+  report_not_draft: "Зөвхөн ноорог тайланг илгээнэ.",
+  report_not_submitted: "Тайлан хяналтад ирээгүй байна.",
+  comments_required: "Засварын тайлбараа бичнэ үү.",
+  reviewer_must_differ_from_advisor: "Өөрийн бэлтгэсэн тайланг батлах боломжгүй.",
+  report_not_approved: "Батлагдаагүй тайланг нийтлэх боломжгүй.",
+  order_not_found: "Захиалга олдсонгүй эсвэл эрхгүй.",
+  report_not_found: "Тайлан олдсонгүй эсвэл эрхгүй.",
+};
+const rmsg = (e: unknown, fallback: string) => REPORT_MESSAGES[dbErrorCode(e) ?? String((e as Error)?.message ?? "")] ?? msg(e, fallback);
+
+export async function saveReportAction(orderId: string, form: FormData) {
+  const access = await requireStaff();
+  const path = `/admin/orders/${orderId}/report`;
+  const { reportContentSchema } = await import("@/lib/reports/schema");
+  let content;
+  try {
+    content = reportContentSchema.parse(JSON.parse(String(form.get("content") ?? "{}")));
+  } catch {
+    backTo(path, { error: "Тайлангийн мэдээлэл буруу байна." });
+  }
+  const submit = form.get("intent") === "submit";
+  try {
+    await asUser(access.user, async (tx) => {
+      const r = await tx`select id from app.save_report_draft(${orderId}::uuid, ${tx.json(content as never)})`;
+      if (submit) await tx`select app.submit_report(${r[0].id}::uuid)`;
+    });
+  } catch (e) {
+    backTo(path, { error: rmsg(e, "Хадгалж чадсангүй.") });
+  }
+  const { dispatchEmails } = await import("@/lib/notify/email");
+  await dispatchEmails().catch(() => {});
+  revalidatePath(path);
+  backTo(path, { ok: submit ? "submitted" : "saved" });
+}
+
+export async function reviewReportAction(orderId: string, reportId: string, form: FormData) {
+  const access = await requireStaff();
+  const path = `/admin/orders/${orderId}/report`;
+  const decision = form.get("decision") === "approved" ? "approved" : "revision_requested";
+  const comments = String(form.get("comments") ?? "").slice(0, 8000);
+  try {
+    await asUser(access.user, (tx) => tx`select app.review_report(${reportId}::uuid, ${decision}::review_decision, ${comments})`);
+  } catch (e) {
+    backTo(path, { error: rmsg(e, "Хадгалж чадсангүй.") });
+  }
+  if (decision === "approved") {
+    // Publish immediately: render PDF, store privately, complete the order.
+    try {
+      const { publishApprovedReport } = await import("@/lib/reports/service");
+      await publishApprovedReport(access.user, reportId);
+    } catch (e) {
+      backTo(path, { error: `Батлагдсан боловч PDF нийтлэхэд алдаа гарлаа: ${rmsg(e, "дахин оролдоно уу")}` });
+    }
+  }
+  const { dispatchEmails } = await import("@/lib/notify/email");
+  await dispatchEmails().catch(() => {});
+  revalidatePath(path);
+  backTo(path, { ok: decision });
+}
+
+export async function publishReportAction(orderId: string, reportId: string) {
+  const access = await requireStaff();
+  const path = `/admin/orders/${orderId}/report`;
+  try {
+    const { publishApprovedReport } = await import("@/lib/reports/service");
+    await publishApprovedReport(access.user, reportId);
+  } catch (e) {
+    backTo(path, { error: rmsg(e, "Нийтэлж чадсангүй.") });
+  }
+  revalidatePath(path);
+  backTo(path, { ok: "approved" });
+}
+
+export async function requestInfoAction(orderId: string, form: FormData) {
+  const access = await requireStaff();
+  const path = `/admin/orders/${orderId}`;
+  const message = String(form.get("message") ?? "").trim().slice(0, 1000);
+  try {
+    await asUser(access.user, (tx) => tx`select app.request_information(${orderId}::uuid, ${message})`);
+  } catch (e) {
+    backTo(path, { error: msg(e, "Хүсэлт илгээж чадсангүй.") });
+  }
+  const { dispatchEmails } = await import("@/lib/notify/email");
+  await dispatchEmails().catch(() => {});
+  backTo(path, { ok: "status" });
+}
+
+export async function refundAction(orderId: string, paymentId: string, form: FormData) {
+  const access = await requireAdmin();
+  const path = `/admin/orders/${orderId}`;
+  const status = form.get("status") === "refunded" ? "refunded" : "refund_pending";
+  const amount = Number(String(form.get("amount") ?? "").replace(/[,\s₮]/g, "")) || null;
+  const note = String(form.get("note") ?? "").trim().slice(0, 1000);
+  try {
+    await asUser(access.user, (tx) => tx`select app.record_refund(${paymentId}::uuid, ${status}::payment_status, ${amount}, ${note})`);
+  } catch (e) {
+    const c = dbErrorCode(e);
+    backTo(path, { error: c === "order_must_be_cancelled" ? "Эхлээд захиалгыг цуцална уу." : c === "invalid_refund_amount" ? "Буцаах дүн буруу." : msg(e, "Буцаалт бүртгэж чадсангүй.") });
+  }
+  backTo(path, { ok: "refund" });
+}
+
+// ---- Branches (super admin) ----
+export async function saveBranchAction(form: FormData) {
+  const access = await requireSuperAdmin();
+  const parsed = z.object({
+    id: z.string().uuid().optional().or(z.literal("").transform(() => undefined)),
+    code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_]{2,16}$/),
+    name: z.string().trim().min(2).max(120),
+    address: z.string().trim().max(300),
+    phone: z.string().trim().max(40),
+    status: z.enum(["active", "inactive"]),
+  }).safeParse({
+    id: form.get("id") ?? "", code: form.get("code"), name: form.get("name"),
+    address: form.get("address") ?? "", phone: form.get("phone") ?? "", status: form.get("status") ?? "active",
+  });
+  if (!parsed.success) backTo("/admin/settings", { error: "Код (латин том үсэг, 2–16) болон нэрээ зөв оруулна уу." });
+  const d = parsed.data;
+  try {
+    await asUser(access.user, (tx) => d.id
+      ? tx`update branches set name = ${d.name}, address = ${d.address || null}, phone = ${d.phone || null}, status = ${d.status} where id = ${d.id}`
+      : tx`insert into branches (code, name, address, phone, status) values (${d.code}, ${d.name}, ${d.address || null}, ${d.phone || null}, ${d.status})`);
+  } catch (e) {
+    backTo("/admin/settings", { error: (e as { code?: string }).code === "23505" ? "Ийм кодтой салбар байна." : "Хадгалж чадсангүй." });
+  }
+  revalidatePath("/admin/settings");
+  backTo("/admin/settings", { ok: "1" });
+}

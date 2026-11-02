@@ -9,6 +9,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const items = [
     { href: "/admin", label: "Тойм", exact: true },
     { href: "/admin/orders", label: "Захиалгууд" },
+    { href: "/admin/reports", label: "Тайлан" },
+    { href: "/dashboard/notifications", label: "Мэдэгдэл" },
     ...(isAdmin ? [
       { href: "/admin/payments", label: "Төлбөр" },
       { href: "/admin/clients", label: "Харилцагчид" },
@@ -17,6 +19,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     ...(access.isSuperAdmin ? [
       { href: "/admin/services", label: "Үйлчилгээ" },
       { href: "/admin/pricing", label: "Үнэ" },
+      { href: "/admin/settings", label: "Тохиргоо" },
     ] : []),
   ];
   const roles = [...access.roles].filter((r) => r !== "CLIENT").map((r) => ROLE_LABEL[r]).join(", ");

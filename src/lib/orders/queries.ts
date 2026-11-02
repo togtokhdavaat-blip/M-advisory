@@ -55,6 +55,14 @@ export async function getOrderDetail(user: SessionUser, orderId: string) {
          from payments where order_id = ${orderId} order by created_at desc`,
       tx`select app.order_actor_capacities(${orderId}::uuid) as caps`,
     ]);
+    const [documents, reports, feedback, requirements] = await Promise.all([
+      tx`select id, original_name, size_bytes, created_at, scan_status, is_internal from documents
+         where order_id = ${orderId} and deleted_at is null order by created_at desc`,
+      tx`select id, report_number, version, overall_risk, published_at from reports
+         where order_id = ${orderId} and status = 'published' order by version desc`,
+      tx`select rating, comment from order_feedback where order_id = ${orderId}`,
+      tx`select code, label from service_requirements where service_id = ${order.service_id} order by sort_order`,
+    ]);
     let quote: { amount: number | null; label: string } | null = null;
     if (order.status === "draft" && property[0]) {
       const q = await tx`
@@ -71,6 +79,10 @@ export async function getOrderDetail(user: SessionUser, orderId: string) {
       payments,
       capacities: (caps[0]?.caps as string[]) ?? [],
       quote,
+      documents,
+      reports,
+      feedback: feedback[0] ?? null,
+      requirements: requirements.map((r) => ({ code: r.code as string, label: r.label as string })),
     };
   });
 }
