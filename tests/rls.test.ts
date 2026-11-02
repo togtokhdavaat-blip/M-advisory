@@ -33,6 +33,9 @@ beforeAll(async () => {
   await grant(branchAdmin2, "BRANCH_ADMIN", "UB2");
   await grant(superAdmin, "SUPER_ADMIN", null);
   branch1 = (await owner`select id from branches where code = 'UB1'`)[0].id as string;
+  // Test files share one database and run in any order; other files approve
+  // prices, so put the catalogue back to its seeded (unapproved) state.
+  await owner`update service_prices set status = 'proposed' where status = 'approved' and effective_to is null`;
 });
 
 afterAll(async () => {

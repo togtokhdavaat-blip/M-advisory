@@ -26,27 +26,33 @@ them in `/admin/pricing`. Locally, payment uses the mock provider ("Туршил
 ## Tests
 
 ```bash
-npm test                            # 55 tests: RLS, permissions, workflow, payments, validation
+npm test                            # 71 tests: RLS, permissions, workflow, payments, reports, validation
 npm run build && npm start          # then, in another shell:
-node tests/e2e/smoke.mjs            # 19-step browser test of the full M CHECK journey
+node tests/e2e/smoke.mjs            # 28-step browser test: order, pay, assign, report, review, PDF download
 ```
 
 `npm test` recreates the `m_advisory_test` database each run.
 
 ## Production setup
 
-1. **Supabase**: create a project; run the files in `supabase/migrations/` in order
-   (`supabase db push` or the SQL editor). Do **not** run `supabase/local/`.
-   Auth → enable email confirmations; set Site URL to `APP_URL` and add `APP_URL/auth/callback`.
-2. **Vercel**: import the repo; set env vars from `.env.example` (production block), with
-   `APP_ENV=production`, `AUTH_PROVIDER=supabase`, `STORAGE_PROVIDER=supabase`, `PAYMENT_PROVIDER=qpay`.
-   The app refuses to start in production with local auth, local storage or mock payments.
-3. **QPay**: needs M Properties' merchant username, password, invoice code. Run the adapter
-   against `merchant-sandbox.qpay.mn` first and confirm the field names with QPay's docs.
-4. **Bootstrap the first super admin** (SQL editor, once):
-   `insert into memberships (user_id, role) select id, 'SUPER_ADMIN' from profiles where email = '…';`
-5. Rename the seeded branches (`Салбар 1`, `Салбар 2`) to the real branch names.
-6. Schedule `reconcileOpenPayments()` (e.g. Vercel Cron) and enable Supabase PITR backups.
+Step-by-step guide (Mongolian): [`docs/DEPLOY.md`](docs/DEPLOY.md). In short:
+
+1. **Supabase** (Tokyo): run `supabase/migrations/` in order (SQL editor or `supabase db push`).
+   Do **not** run `supabase/local/`. Auth: email confirmation on, Site URL = `APP_URL`,
+   redirect `APP_URL/auth/callback`, custom SMTP (Resend).
+2. **Vercel**: import the repo, set the production block of `.env.example` plus
+   `CRON_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`. The app refuses to start in production
+   with local auth, local storage or mock payments. `vercel.json` schedules `/api/cron` daily
+   (payment reconciliation, email outbox, document retention purge).
+3. **QPay**: merchant username, password and invoice code for Симкас Пропертиз ХХК.
+   Test against `merchant-sandbox.qpay.mn` first.
+4. **First super admin** (SQL editor, once, after registering on the site):
+   `insert into memberships (user_id, role, branch_id) select id, 'SUPER_ADMIN', null from auth.users where email = '…';`
+5. In the staff dashboard: rename branches, approve prices, review service texts.
+   Legal pages (`/legal/terms`, `/legal/privacy`) are drafts until approved by counsel.
+
+CI (`.github/workflows/ci.yml`) runs typecheck, the test suite against Postgres 16 and
+the production build on every push and pull request.
 
 ## Security notes
 

@@ -127,9 +127,49 @@ try {
   await Promise.all([v.waitForURL(/ok=status/), v.getByRole("button", { name: "Хадгалах" }).click()]);
   assert(await seen(v.getByText("Гүйцэтгэж байна").first()), "advisor moved order to in progress");
 
-  // --- Client sees progress -------------------------------------------------
+  // --- Client sees progress and uploads a document ----------------------------
   await c.goto(orderUrl);
   assert(await seen(c.getByText("Гүйцэтгэж байна").first()), "client sees updated status");
+  await c.setInputFiles("input[type=file]", { name: "гэрчилгээ.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n%%EOF\n") });
+  await Promise.all([c.waitForURL(/uploaded=1/), c.getByRole("button", { name: "Байршуулах" }).click()]);
+  assert(await seen(c.getByRole("link", { name: "гэрчилгээ.pdf" })), "client uploaded a document");
+  const docHref = await c.getByRole("link", { name: "гэрчилгээ.pdf" }).getAttribute("href");
+  const docRes = await i.request.get(docHref);
+  assert(docRes.status() === 404, "another client cannot download the document");
+
+  // --- Advisor writes and submits the report -----------------------------------
+  await v.goto(`/admin/orders/${orderId}/report`);
+  await v.fill("#es", "Өмчлөлийн баримт зөв. Банкны барьцаа илэрсэн тул худалдан авахаас өмнө чөлөөлүүлнэ.");
+  await v.getByRole("button", { name: "+ Эрсдэл нэмэх" }).click();
+  await v.getByLabel("Эрсдэлийн нэр").fill("Банкны барьцаа");
+  await v.getByLabel("Түвшин").selectOption("high");
+  await v.getByLabel("Нотлох эх сурвалж").last().fill("Улсын бүртгэлийн лавлагаа, 2026-11-02");
+  await v.fill("#rec", "Барьцаа чөлөөлөгдсөний дараа гэрээ байгуулах.");
+  await Promise.all([v.waitForURL(/ok=submitted/), v.getByRole("button", { name: "Хянуулахаар илгээх" }).click()]);
+  assert(await seen(v.getByText("Тайлан хянагч руу илгээгдлээ")), "advisor submitted the report");
+  await v.screenshot({ path: `${SHOTS}/08-report-editor.png`, fullPage: true });
+
+  // --- Reviewer approves -> PDF published -> order completed --------------------
+  const rev = await ctx();
+  const r = await rev.newPage();
+  await login(r, "reviewer@m-advisory.local", undefined, "/admin/reports");
+  await r.goto(`/admin/orders/${orderId}/report`);
+  await Promise.all([r.waitForURL(/ok=approved/), r.getByRole("button", { name: "Батлах ба нийтлэх" }).click()]);
+  assert(await seen(r.getByText("PDF үүсч харилцагчид нийтлэгдлээ")), "reviewer approved and the PDF was published");
+
+  await c.goto(orderUrl);
+  assert(await seen(c.getByText("Дууссан").first()), "order is completed for the client");
+  const pdfHref = await c.getByRole("link", { name: "PDF татах" }).first().getAttribute("href");
+  const pdfRes = await c.request.get(pdfHref);
+  const body = await pdfRes.body();
+  assert(pdfRes.status() === 200 && body.subarray(0, 5).toString() === "%PDF-", "client downloaded the PDF report");
+  assert((await i.request.get(pdfHref)).status() === 404, "another client cannot download the report");
+  await c.locator("input[name=rating][value='5']").check();
+  await Promise.all([c.waitForURL(/thanks=1/), c.getByRole("button", { name: "Илгээх" }).click()]);
+  assert(await seen(c.getByText("Үнэлгээ өгсөнд баярлалаа")), "client rated the service");
+  await c.screenshot({ path: `${SHOTS}/09-completed.png`, fullPage: true });
+  await c.goto("/dashboard/notifications");
+  assert(await seen(c.getByText("Таны тайлан бэлэн боллоо")), "client received the report notification");
   await a.goto("/admin");
   await a.screenshot({ path: `${SHOTS}/07-admin-dashboard.png`, fullPage: true });
   assert(await seen(a.getByText("₮200,000").first()), "dashboard revenue reflects the paid order");
