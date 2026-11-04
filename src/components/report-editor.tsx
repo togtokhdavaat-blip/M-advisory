@@ -4,7 +4,9 @@ import { useState } from "react";
 import {
   RISK_LABEL, RISK_LEVELS, VERIFICATION_LABEL, VERIFICATION_RESULTS, overallRisk, type ReportContent, type RiskLevel,
 } from "@/lib/reports/schema";
-import { Button, Card, Field, Input, Select, Textarea, cx } from "./ui";
+import { draftFromChecklist, emptyChecklist, pruneChecklist, summarize, type Checklist } from "@/lib/checklists/m-check";
+import { ChecklistPanel, ChecklistSummaryBar } from "./checklist-panel";
+import { Alert, Button, Card, Field, Input, Select, Textarea, cx } from "./ui";
 
 const RISK_TONE: Record<RiskLevel, string> = {
   low: "bg-good-soft text-good",
@@ -13,8 +15,23 @@ const RISK_TONE: Record<RiskLevel, string> = {
   not_verified: "bg-surface-2 text-muted",
 };
 
+type Step = "checklist" | "report";
+
 export function ReportEditor({ initial, action, readOnly }: { initial: ReportContent; action: (f: FormData) => void; readOnly?: boolean }) {
   const [c, setC] = useState<ReportContent>(initial);
+  const checklist: Checklist = c.checklist ?? emptyChecklist();
+  const [step, setStep] = useState<Step>(readOnly && !c.checklist ? "report" : !readOnly && !initial.executive_summary ? "checklist" : "report");
+  const [generated, setGenerated] = useState(false);
+  const setChecklist = (next: Checklist) => setC((p) => ({ ...p, checklist: next }));
+  const generate = () => {
+    const touched = c.executive_summary.trim() || c.recommendations.trim() || c.risks.length > 0;
+    if (touched && !window.confirm("Гол дүгнэлт, баримтын шалгалт, эрсдэл, зөвлөмж, дараагийн алхмыг жагсаалтаас дахин үүсгэнэ. Гараар хийсэн өөрчлөлт эдгээр хэсэгт солигдоно. Үргэлжлүүлэх үү?")) return;
+    setC((p) => draftFromChecklist(p, p.checklist ?? emptyChecklist()));
+    setGenerated(true);
+    setStep("report");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const summary = summarize(checklist);
   const set = <K extends keyof ReportContent>(k: K, v: ReportContent[K]) => setC((p) => ({ ...p, [k]: v }));
   const upd = <K extends "document_findings" | "comparables" | "risks">(k: K, i: number, patch: Partial<ReportContent[K][number]>) =>
     setC((p) => ({ ...p, [k]: (p[k] as ReportContent[K][number][]).map((row, j) => (j === i ? { ...row, ...patch } : row)) }));
@@ -24,10 +41,41 @@ export function ReportEditor({ initial, action, readOnly }: { initial: ReportCon
 
   return (
     <form action={action} className="space-y-6">
-      <input type="hidden" name="content" value={JSON.stringify(c)} />
+      <input type="hidden" name="content" value={JSON.stringify({ ...c, checklist: c.checklist ? pruneChecklist(c.checklist) : null })} />
+      <div className="grid grid-cols-2 gap-1 rounded-xl border border-line bg-surface p-1" role="tablist" aria-label="Алхам">
+        {([["checklist", "1. Шалгах жагсаалт"], ["report", "2. Тайлан"]] as const).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={step === k} onClick={() => setStep(k)}
+            className={cx("min-h-11 rounded-lg px-3 text-sm font-semibold transition", step === k ? "bg-accent text-accent-ink" : "text-muted hover:text-ink")}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {step === "checklist" && (
+        <>
+          <ChecklistPanel value={checklist} onChange={setChecklist} readOnly={dis} />
+          {!dis && (
+            <div className="sticky bottom-0 -mx-1 flex flex-col-reverse gap-3 border-t border-line bg-bg/95 px-1 py-3 backdrop-blur sm:flex-row sm:justify-end">
+              <Button type="submit" name="intent" value="save" variant="secondary">Ноорог хадгалах</Button>
+              <Button type="button" onClick={generate} disabled={!checklist.scope}>Жагсаалтаас тайлан үүсгэх →</Button>
+            </div>
+          )}
+        </>
+      )}
+
+      {step === "report" && <>
+      {generated && (
+        <Alert tone="good" title="Тайлангийн ноорог жагсаалтаас үүслээ">
+          Гол дүгнэлт, баримтын шалгалт, эрсдэл, зөвлөмжийг шалгаж засаарай. Зах зээлийн шинжилгээ, харьцуулалтыг өөрөө бөглөнө. Дараа нь хадгалж, хянуулахаар илгээнэ.
+        </Alert>
+      )}
+      {c.checklist?.scope && <ChecklistSummaryBar checklist={checklist} />}
       <div className={cx("rounded-lg px-4 py-3 text-sm font-semibold", RISK_TONE[overall])} role="status">
         Нийт эрсдэлийн түвшин (автоматаар): {RISK_LABEL[overall]}
       </div>
+      {!dis && c.checklist?.scope && summary.unchecked > 0 && (
+        <Alert tone="warn">Жагсаалтын {summary.unchecked} зүйл шалгагдаагүй байна. Тайланд «Баталгаажаагүй» гэж тусна.</Alert>
+      )}
 
       <Card className="space-y-4">
         <Field label="1. Гол дүгнэлт (Executive Summary)" name="es" required>
@@ -105,6 +153,7 @@ export function ReportEditor({ initial, action, readOnly }: { initial: ReportCon
           <Button type="submit" name="intent" value="submit">Хянуулахаар илгээх</Button>
         </div>
       )}
+      </>}
     </form>
   );
 }

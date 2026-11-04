@@ -26,9 +26,9 @@ them in `/admin/pricing`. Locally, payment uses the mock provider ("Туршил
 ## Tests
 
 ```bash
-npm test                            # 71 tests: RLS, permissions, workflow, payments, reports, validation
+npm test                            # 83 tests: RLS, permissions, workflow, payments, reports, checklist, validation
 npm run build && npm start          # then, in another shell:
-node tests/e2e/smoke.mjs            # 28-step browser test: order, pay, assign, report, review, PDF download
+node tests/e2e/smoke.mjs            # 36-step browser test: order, pay, assign, checklist, report, review, PDF download
 ```
 
 `npm test` recreates the `m_advisory_test` database each run.

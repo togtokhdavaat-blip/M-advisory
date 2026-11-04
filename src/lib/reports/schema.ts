@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { checklistSchema } from "../checklists/m-check";
 
 export const RISK_LEVELS = ["low", "medium", "high", "not_verified"] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
@@ -25,7 +26,7 @@ export const reportContentSchema = z.object({
   property_info: text(4000),
   document_findings: z
     .array(z.object({ item: text(300), result: z.enum(VERIFICATION_RESULTS), note: text(2000), source: text(500) }))
-    .max(40)
+    .max(80)
     .default([]),
   market_summary: text(6000),
   comparables: z
@@ -34,11 +35,13 @@ export const reportContentSchema = z.object({
     .default([]),
   risks: z
     .array(z.object({ title: text(300), level: z.enum(RISK_LEVELS), description: text(4000), evidence: text(2000) }))
-    .max(40)
+    .max(80)
     .default([]),
   recommendations: text(6000),
   next_steps: text(4000),
   limitations: text(6000),
+  // Advisor's due-diligence checklist (M CHECK). Null on reports written before it existed.
+  checklist: checklistSchema.nullable().default(null),
 });
 export type ReportContent = z.infer<typeof reportContentSchema>;
 
@@ -52,10 +55,17 @@ export function emptyReport(): ReportContent {
   return reportContentSchema.parse({ limitations: DEFAULT_LIMITATIONS });
 }
 
-export function overallRisk(c: Pick<ReportContent, "risks">): RiskLevel {
+/**
+ * Overall risk: high > medium > not_verified > low. A Red checklist item counts
+ * as high and a Yellow one as medium even if the advisor removed the matching
+ * risk row, so the checklist verdict can never be traded down. Mirrors
+ * app.overall_risk in SQL.
+ */
+export function overallRisk(c: Pick<ReportContent, "risks"> & { checklist?: ReportContent["checklist"] }): RiskLevel {
+  const answers = Object.values(c.checklist?.items ?? {}).map((a) => a.v);
   const has = (l: RiskLevel) => c.risks.some((r) => r.level === l);
-  if (has("high")) return "high";
-  if (has("medium")) return "medium";
+  if (has("high") || answers.includes("R")) return "high";
+  if (has("medium") || answers.includes("Y")) return "medium";
   if (has("not_verified")) return "not_verified";
   if (has("low")) return "low";
   return "not_verified";

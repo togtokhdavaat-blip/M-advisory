@@ -1,5 +1,9 @@
-import { Card, PageHeader, Stat } from "@/components/ui";
-import { adminMetrics } from "@/lib/admin/queries";
+import Link from "next/link";
+import { Badge, Card, PageHeader, Stat } from "@/components/ui";
+import { adminMetrics, myWork } from "@/lib/admin/queries";
+import { FINAL_LABEL } from "@/lib/checklists/m-check";
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TONE } from "@/lib/labels";
+import type { OrderStatus } from "@/lib/orders/state-machine";
 import { requireStaff } from "@/lib/authz";
 import { formatMnt } from "@/lib/format";
 
@@ -21,10 +25,35 @@ function Bars({ rows }: { rows: { name: string; n: number }[] }) {
 
 export default async function AdminHome() {
   const access = await requireStaff();
-  const m = await adminMetrics(access.user);
+  const [m, work] = await Promise.all([adminMetrics(access.user), myWork(access.user)]);
   return (
     <>
       <PageHeader title="Ажлын самбар" description="Таны эрхийн хүрээнд харагдах захиалгын бодит тоо." />
+      {work.length > 0 && (
+        <Card className="mb-6">
+          <h2 className="font-semibold">Миний ажил</h2>
+          <p className="mt-1 text-sm text-muted">Танд хуваарилагдсан, дуусаагүй захиалгууд. Зөвлөх шалгах жагсаалтаа бөглөж, тайлангаа үүсгэнэ. Хянагч илгээсэн тайланг батална.</p>
+          <ul className="mt-4 divide-y divide-line">
+            {work.map((w) => (
+              <li key={`${w.id}-${w.role}`} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{w.orderNumber} · {w.service} <span className="font-normal text-muted">({w.role === "advisor" ? "зөвлөх" : "хянагч"})</span></p>
+                  <p className="truncate text-xs text-muted">{w.address || "Хаяг оруулаагүй"}</p>
+                  {w.progress && (
+                    <p className="mt-1 text-xs">Жагсаалт: {w.progress.done}/{w.progress.total} · {FINAL_LABEL[w.progress.verdict]}</p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <Badge tone={ORDER_STATUS_TONE[w.status as OrderStatus]}>{ORDER_STATUS_LABEL[w.status as OrderStatus]}</Badge>
+                  <Link className="text-sm font-semibold text-accent" href={`/admin/orders/${w.id}/report`}>
+                    {w.role === "reviewer" ? "Хянах →" : w.progress ? "Үргэлжлүүлэх →" : "Шалгалт эхлэх →"}
+                  </Link>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Нийт захиалга" value={m.total} />
         <Stat label="Төлөгдсөн" value={m.paid} />

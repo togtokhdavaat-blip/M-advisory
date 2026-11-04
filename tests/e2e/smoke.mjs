@@ -137,14 +137,30 @@ try {
   const docRes = await i.request.get(docHref);
   assert(docRes.status() === 404, "another client cannot download the document");
 
-  // --- Advisor writes and submits the report -----------------------------------
-  await v.goto(`/admin/orders/${orderId}/report`);
-  await v.fill("#es", "Өмчлөлийн баримт зөв. Банкны барьцаа илэрсэн тул худалдан авахаас өмнө чөлөөлүүлнэ.");
-  await v.getByRole("button", { name: "+ Эрсдэл нэмэх" }).click();
-  await v.getByLabel("Эрсдэлийн нэр").fill("Банкны барьцаа");
-  await v.getByLabel("Түвшин").selectOption("high");
-  await v.getByLabel("Нотлох эх сурвалж").last().fill("Улсын бүртгэлийн лавлагаа, 2026-11-02");
-  await v.fill("#rec", "Барьцаа чөлөөлөгдсөний дараа гэрээ байгуулах.");
+  // --- Advisor works the due-diligence checklist, generates and submits the report ---
+  await v.goto("/admin");
+  assert(await seen(v.getByRole("heading", { name: "Миний ажил" })), "advisor sees their work list");
+  await Promise.all([v.waitForURL(/\/report$/), v.getByRole("link", { name: "Шалгалт эхлэх →" }).first().click()]);
+  v.on("dialog", (d) => d.accept());
+  await v.getByRole("radio", { name: "Ашиглалтад орсон үл хөдлөх" }).click();
+  for (let n = 1; n <= 38; n++) {
+    if (n === 31) continue; // left unchecked on purpose
+    const verdict = n === 3 ? "Улаан" : n === 12 ? "Шар" : "Ногоон";
+    await v.getByRole("radio", { name: `№${n} ${verdict}`, exact: true }).click();
+  }
+  await v.getByLabel("№3 тэмдэглэл", { exact: true }).fill("Хаан банкны барьцаанд байна (лавлагаа 2026-11-02)");
+  await v.getByLabel("№12 тэмдэглэл", { exact: true }).fill("СӨХ-ийн өр 120,000₮");
+  assert(await seen(v.getByText("37 / 38 шалгасан")), "checklist progress updates live");
+  assert(await seen(v.getByText("Жагсаалтын дүгнэлт: Улаан")), "one red item makes the checklist verdict red");
+  await Promise.all([v.waitForURL(/ok=saved/), v.getByRole("button", { name: "Ноорог хадгалах" }).first().click()]);
+  assert(await seen(v.getByText("37 / 38 шалгасан")), "checklist answers persist after saving");
+  await v.screenshot({ path: `${SHOTS}/08a-checklist.png`, fullPage: false });
+  await v.getByRole("button", { name: "Жагсаалтаас тайлан үүсгэх →" }).click();
+  assert(await seen(v.getByText("Тайлангийн ноорог жагсаалтаас үүслээ")), "report draft generated from the checklist");
+  assert((await v.inputValue("#es")).includes("Эцсийн дүгнэлт: Улаан"), "summary states the red verdict");
+  assert(await seen(v.getByText("Нийт эрсдэлийн түвшин (автоматаар): Өндөр")), "overall risk derived as high");
+  assert((await v.locator("input[aria-label='Эрсдэлийн нэр']").count()) === 3, "red, yellow and unchecked items became risks");
+  await v.fill("#ms", "Ойролцоох 4 зарын м² дундаж үнэ 4.2 сая ₮; асууж буй үнэ зах зээлийн үнэд нийцнэ.");
   await Promise.all([v.waitForURL(/ok=submitted/), v.getByRole("button", { name: "Хянуулахаар илгээх" }).click()]);
   assert(await seen(v.getByText("Тайлан хянагч руу илгээгдлээ")), "advisor submitted the report");
   await v.screenshot({ path: `${SHOTS}/08-report-editor.png`, fullPage: true });
