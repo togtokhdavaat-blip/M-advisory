@@ -43,3 +43,34 @@ export async function adminMetrics(user: SessionUser) {
     };
   });
 }
+
+/** The signed-in advisor's or reviewer's open orders, with checklist progress. */
+export async function myWork(user: SessionUser) {
+  const { checklistSchema, summarize } = await import("../checklists/m-check");
+  const rows = await asUser(user, (tx) => tx`
+    select o.id, o.order_number, o.status, a.role, s.name as service_name,
+           concat_ws(', ', p.district, p.address) as address,
+           r.status as report_status, r.content -> 'checklist' as checklist
+    from order_assignments a
+    join orders o on o.id = a.order_id
+    join services s on s.id = o.service_id
+    left join properties p on p.id = o.property_id
+    left join lateral (select status, content from reports where order_id = o.id order by version desc limit 1) r on true
+    where a.user_id = ${user.id} and a.is_active and o.status not in ('completed', 'cancelled')
+    order by o.updated_at desc limit 50`);
+  return rows.map((r) => {
+    const parsed = checklistSchema.nullable().safeParse(r.checklist ?? null);
+    const cl = parsed.success ? parsed.data : null;
+    const s = cl?.scope ? summarize(cl) : null;
+    return {
+      id: r.id as string,
+      orderNumber: r.order_number as string,
+      status: r.status as string,
+      role: r.role as "advisor" | "reviewer",
+      service: r.service_name as string,
+      address: (r.address as string) || "",
+      reportStatus: (r.report_status as string | null) ?? null,
+      progress: s ? { done: s.total - s.unchecked, total: s.total, verdict: s.verdict } : null,
+    };
+  });
+}

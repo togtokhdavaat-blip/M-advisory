@@ -2,6 +2,7 @@ import "server-only";
 import PDFDocument from "pdfkit";
 import { join } from "node:path";
 import { formatDate, formatMnt } from "../format";
+import { FINAL_LABEL, OWNER_LABEL, VERDICT_LABEL as CHECK_LABEL, VERDICT_SHORT, itemsInScope, sectionsInScope, summarize, SCOPE_LABEL, type Verdict } from "../checklists/m-check";
 import { RISK_LABEL, VERIFICATION_LABEL, overallRisk, type ReportContent, type RiskLevel } from "./schema";
 
 export interface ReportPdfInput {
@@ -76,6 +77,15 @@ export function renderReportPdf(r: ReportPdfInput): Promise<Uint8Array> {
     doc.roundedRect(56, boxY, width, 34, 6).fill(RISK_COLOR[overall]);
     doc.font("bold").fontSize(11).fillColor("#ffffff").text(`Нийт эрсдэлийн түвшин: ${RISK_LABEL[overall]}`, 70, boxY + 11);
     doc.fillColor(INK).text("", 56, boxY + 44);
+    const cl = r.content.checklist;
+    if (cl?.scope) {
+      const sm = summarize(cl);
+      doc.font("body").fontSize(9).fillColor(MUTED).text(
+        `Шалгах жагсаалтын дүгнэлт: ${FINAL_LABEL[sm.verdict]} · ${sm.total} зүйлээс Ногоон ${sm.counts.G}, Шар ${sm.counts.Y}, Улаан ${sm.counts.R}, Хамааралгүй ${sm.counts.NA}` +
+        (sm.unchecked ? `, шалгагдаагүй ${sm.unchecked}` : "") + ". Дэлгэрэнгүйг хавсралтаас үзнэ үү.",
+      );
+      doc.fillColor(INK);
+    }
 
     h("1. Гол дүгнэлт");
     p(r.content.executive_summary);
@@ -119,6 +129,29 @@ export function renderReportPdf(r: ReportPdfInput): Promise<Uint8Array> {
     kv("Бэлтгэсэн зөвлөх", r.preparedBy);
     kv("Хянаж баталсан", `${r.approvedBy} · ${formatDate(r.approvedAt, true)}`);
     kv("Гүйцэтгэгч", "Симкас Пропертиз ХХК (брэнд нэр: M Properties)");
+
+    if (cl?.scope) {
+      doc.addPage();
+      doc.font("bold").fontSize(13).fillColor(ACCENT).text(`Хавсралт. Шалгах жагсаалт (${SCOPE_LABEL[cl.scope]}, хувилбар ${cl.version})`);
+      doc.font("body").fontSize(8).fillColor(MUTED).text("Н = Ногоон, Ш = Шар, У = Улаан, Х = Хамааралгүй, — = шалгагдаагүй (эрсдэлгүй гэсэн үг биш).").moveDown(0.4);
+      const VCOLOR: Record<Verdict, string> = { G: RISK_COLOR.low, Y: RISK_COLOR.medium, R: RISK_COLOR.high, NA: MUTED };
+      const items = itemsInScope(cl.scope);
+      for (const sec of sectionsInScope(cl.scope)) {
+        if (doc.y > doc.page.height - 120) doc.addPage();
+        doc.moveDown(0.4).font("bold").fontSize(10).fillColor(ACCENT).text(`${sec.code}. ${sec.title}`).moveDown(0.2);
+        for (const it of items.filter((i) => i.section === sec.code)) {
+          if (doc.y > doc.page.height - 90) doc.addPage();
+          const a = cl.items[String(it.n)];
+          const y = doc.y;
+          doc.font("bold").fontSize(8.5).fillColor(a?.v ? VCOLOR[a.v] : MUTED).text(a?.v ? VERDICT_SHORT[a.v] : "—", 56, y, { width: 18 });
+          doc.font("body").fontSize(8.5).fillColor(INK).text(`№${it.n} ${it.text}`, 76, y, { width: width - 20 });
+          if (a?.note) doc.font("body").fontSize(8).fillColor(INK).text(`${a.v ? CHECK_LABEL[a.v] : "Тэмдэглэл"}: ${a.note}`, 76, doc.y, { width: width - 20 });
+          doc.font("body").fontSize(7.5).fillColor(MUTED).text(`${it.source} · ${OWNER_LABEL[it.owner]}`, 76, doc.y, { width: width - 20 });
+          doc.moveDown(0.35);
+        }
+      }
+      doc.x = 56;
+    }
 
     // Footer on every page
     const range = doc.bufferedPageRange();

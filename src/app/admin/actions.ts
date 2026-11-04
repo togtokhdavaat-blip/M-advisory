@@ -198,6 +198,8 @@ export async function saveReportAction(orderId: string, form: FormData) {
   let content;
   try {
     content = reportContentSchema.parse(JSON.parse(String(form.get("content") ?? "{}")));
+    const { pruneChecklist } = await import("@/lib/checklists/m-check");
+    if (content.checklist) content.checklist = pruneChecklist(content.checklist);
   } catch {
     backTo(path, { error: "Тайлангийн мэдээлэл буруу байна." });
   }
